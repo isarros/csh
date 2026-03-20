@@ -21,4 +21,7 @@ build-doc
 .codechecker
 sysroot*/
 lib/googletest-1.14.0
-lib/packagecache
+lib/packagecachelib/.wraplock
+
+lib/.wraplock
+lib/packagecache/
