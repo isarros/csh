@@ -16,13 +16,45 @@ static int win_payload_get_state_cmd(struct slash *slash) {
 slash_command_sub(win_payload, get_state, win_payload_get_state_cmd, "", "Get win_payload state");
 
 static int win_payload_start_cmd(struct slash *slash) {
-    if (slash->argc < 2 || slash->argv[1][0] == '\0') {
-        slash_printf(slash, "Usage: win_payload start <app>\n");
+    const char *app;
+    const char *config_path;
+    uint8_t arg_buf[PAYLOAD_MAX_ARG_LEN];
+    size_t app_len;
+    size_t config_len;
+    size_t arg_len;
+
+    if (slash->argc < 3 || slash->argv[1][0] == '\0' || slash->argv[2][0] == '\0') {
+        slash_printf(slash, "Usage: win_payload start <app> <nsr_path>\n");
         return SLASH_EINVAL;
     }
-    return win_payload_send_request(slash, slash_dfl_node, slash_dfl_timeout, CMD_START_APP, slash->argv[1]);
+
+    app = slash->argv[1];
+    config_path = slash->argv[2];
+    app_len = strlen(app);
+    config_len = strlen(config_path);
+    arg_len = app_len + 1 + config_len + 1;
+
+    if (arg_len > sizeof(arg_buf)) {
+        slash_printf(slash, "Arguments too long\n");
+        return SLASH_EINVAL;
+    }
+
+    memcpy(arg_buf, app, app_len + 1);
+    memcpy(arg_buf + app_len + 1, config_path, config_len + 1);
+
+    return win_payload_send_request_raw_ex(slash,
+                                           slash_dfl_node,
+                                           slash_dfl_timeout,
+                                           CMD_START_APP,
+                                           arg_buf,
+                                           arg_len,
+                                           1,
+                                           1,
+                                           NULL,
+                                           NULL,
+                                           0);
 }
-slash_command_sub(win_payload, start, win_payload_start_cmd, "<app>", "Start win_payload app");
+slash_command_sub(win_payload, start, win_payload_start_cmd, "<app> <nsr_path>", "Start win_payload app");
 
 static int win_payload_stop_cmd(struct slash *slash) {
     if (slash->argc < 2 || slash->argv[1][0] == '\0') {
