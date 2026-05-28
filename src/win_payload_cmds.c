@@ -8,28 +8,28 @@
 #include "win_payload_client.h"
 #include "win_payload_upload.h"
 
+#define WIN_PAYLOAD_APP_INDALOS "indalos"
+
+static char g_nsr_config_path[PAYLOAD_MAX_ARG_LEN];
+
 slash_command_group(win_payload, "Payload control");
+slash_command_group(set, "Set payload options");
+slash_command_group(get, "Get payload values");
 
 static int win_payload_get_state_cmd(struct slash *slash) {
     return win_payload_send_request(slash, slash_dfl_node, slash_dfl_timeout, CMD_GET_STATE, NULL);
 }
 slash_command_sub(win_payload, get_state, win_payload_get_state_cmd, "", "Get win_payload state");
 
-static int win_payload_start_cmd(struct slash *slash) {
-    const char *app;
-    const char *config_path;
+static int win_payload_send_start_app(struct slash *slash,
+                                      const char *app,
+                                      const char *config_path,
+                                      int verbose) {
     uint8_t arg_buf[PAYLOAD_MAX_ARG_LEN];
     size_t app_len;
     size_t config_len;
     size_t arg_len;
 
-    if (slash->argc < 3 || slash->argv[1][0] == '\0' || slash->argv[2][0] == '\0') {
-        slash_printf(slash, "Usage: win_payload start <app> <nsr_path>\n");
-        return SLASH_EINVAL;
-    }
-
-    app = slash->argv[1];
-    config_path = slash->argv[2];
     app_len = strlen(app);
     config_len = strlen(config_path);
     arg_len = app_len + 1 + config_len + 1;
@@ -49,10 +49,35 @@ static int win_payload_start_cmd(struct slash *slash) {
                                            arg_buf,
                                            arg_len,
                                            1,
-                                           1,
+                                           verbose,
                                            NULL,
                                            NULL,
                                            0);
+}
+
+static int win_payload_send_stop_app(struct slash *slash,
+                                     const char *app,
+                                     int verbose) {
+    return win_payload_send_request_raw_ex(slash,
+                                           slash_dfl_node,
+                                           slash_dfl_timeout,
+                                           CMD_STOP_APP,
+                                           app,
+                                           strlen(app),
+                                           1,
+                                           verbose,
+                                           NULL,
+                                           NULL,
+                                           0);
+}
+
+static int win_payload_start_cmd(struct slash *slash) {
+    if (slash->argc < 3 || slash->argv[1][0] == '\0' || slash->argv[2][0] == '\0') {
+        slash_printf(slash, "Usage: win_payload start <app> <nsr_path>\n");
+        return SLASH_EINVAL;
+    }
+
+    return win_payload_send_start_app(slash, slash->argv[1], slash->argv[2], 1);
 }
 slash_command_sub(win_payload, start, win_payload_start_cmd, "<app> <nsr_path>", "Start win_payload app");
 
@@ -61,9 +86,95 @@ static int win_payload_stop_cmd(struct slash *slash) {
         slash_printf(slash, "Usage: win_payload stop <app>\n");
         return SLASH_EINVAL;
     }
-    return win_payload_send_request(slash, slash_dfl_node, slash_dfl_timeout, CMD_STOP_APP, slash->argv[1]);
+    return win_payload_send_stop_app(slash, slash->argv[1], 1);
 }
 slash_command_sub(win_payload, stop, win_payload_stop_cmd, "<app>", "Stop win_payload app");
+
+static int set_nsr_config_path_cmd(struct slash *slash) {
+    size_t path_len;
+    size_t max_path_len;
+
+    if (slash->argc < 2 || slash->argv[1][0] == '\0') {
+        slash_printf(slash, "Usage: set nsr_config_path <Windows_nsr_config_path>\n");
+        return SLASH_EINVAL;
+    }
+
+    path_len = strlen(slash->argv[1]);
+    max_path_len = PAYLOAD_MAX_ARG_LEN - strlen(WIN_PAYLOAD_APP_INDALOS) - 2;
+    if (path_len > max_path_len || path_len >= sizeof(g_nsr_config_path)) {
+        slash_printf(slash, "NSR config path too long\n");
+        return SLASH_EINVAL;
+    }
+
+    memcpy(g_nsr_config_path, slash->argv[1], path_len + 1);
+    slash_printf(slash, "nsr_config_path=%s\n", g_nsr_config_path);
+    return SLASH_SUCCESS;
+}
+slash_command_sub(set, nsr_config_path, set_nsr_config_path_cmd, "<Windows_nsr_config_path>", "Set Windows NSR config path");
+
+static int set_mode_cmd(struct slash *slash) {
+    if (slash->argc < 2 || slash->argv[1][0] == '\0') {
+        slash_printf(slash, "Usage: set mode <0|1>\n");
+        return SLASH_EINVAL;
+    }
+
+    if (strcmp(slash->argv[1], "0") == 0) {
+        return win_payload_send_stop_app(slash, WIN_PAYLOAD_APP_INDALOS, 1);
+    }
+
+    if (strcmp(slash->argv[1], "1") == 0) {
+        if (g_nsr_config_path[0] == '\0') {
+            slash_printf(slash, "Set nsr_config_path first\n");
+            return SLASH_EINVAL;
+        }
+
+        return win_payload_send_start_app(slash, WIN_PAYLOAD_APP_INDALOS, g_nsr_config_path, 1);
+    }
+
+    slash_printf(slash, "Usage: set mode <0|1>\n");
+    return SLASH_EINVAL;
+}
+slash_command_sub(set, mode, set_mode_cmd, "<0|1>", "Set payload mode");
+
+static int get_state_cmd(struct slash *slash) {
+    uint8_t status = 0;
+    char reply[256];
+    int rc;
+
+    rc = win_payload_send_request_raw_ex(slash,
+                                         slash_dfl_node,
+                                         slash_dfl_timeout,
+                                         CMD_GET_STATE,
+                                         NULL,
+                                         0,
+                                         1,
+                                         0,
+                                         &status,
+                                         reply,
+                                         sizeof(reply));
+    if (rc != 0)
+        return SLASH_SUCCESS;
+
+    if (status != 0) {
+        slash_printf(slash, "status=%u\n", status);
+        slash_printf(slash, "%s\n", reply);
+        return SLASH_SUCCESS;
+    }
+
+    if (strstr(reply, "indalos=RUNNING") != NULL) {
+        slash_printf(slash, "1\n");
+        return SLASH_SUCCESS;
+    }
+
+    if (strstr(reply, "indalos=STOPPED") != NULL) {
+        slash_printf(slash, "0\n");
+        return SLASH_SUCCESS;
+    }
+
+    slash_printf(slash, "Failed to parse state reply: %s\n", reply);
+    return SLASH_SUCCESS;
+}
+slash_command_sub(get, state, get_state_cmd, "", "Get payload mode state");
 
 static int win_payload_reboot_os_cmd(struct slash *slash) {
     return win_payload_send_request(slash, slash_dfl_node, slash_dfl_timeout, CMD_REBOOT_OS, NULL);
