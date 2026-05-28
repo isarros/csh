@@ -21,7 +21,6 @@ typedef enum {
     CMD_START_APP        = 2,
     CMD_STOP_APP         = 3,
     CMD_REBOOT_OS        = 4,
-    CMD_SHUTDOWN_OS      = 5,
     CMD_CLEAR_TESTFOLDER = 6,
     CMD_PUT_FILE_BEGIN   = 7,
     CMD_PUT_FILE_DATA    = 8,

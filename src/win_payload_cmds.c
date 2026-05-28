@@ -181,11 +181,6 @@ static int win_payload_reboot_os_cmd(struct slash *slash) {
 }
 slash_command_sub(win_payload, reboot_os, win_payload_reboot_os_cmd, "", "Reboot remote OS");
 
-static int win_payload_shutdown_os_cmd(struct slash *slash) {
-    return win_payload_send_request(slash, slash_dfl_node, slash_dfl_timeout, CMD_SHUTDOWN_OS, NULL);
-}
-slash_command_sub(win_payload, shutdown_os, win_payload_shutdown_os_cmd, "", "Shutdown remote OS");
-
 static int win_payload_clear_testfolder_cmd(struct slash *slash) {
     if (slash->argc < 2 || strcmp(slash->argv[1], "CONFIRM") != 0) {
         slash_printf(slash, "Usage: win_payload clear_testfolder CONFIRM\n");
