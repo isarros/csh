@@ -23,7 +23,7 @@ static int win_payload_parse_numeric_reply(struct slash *slash,
     return 0;
 }
 
-int win_payload_send_request_raw_ex(struct slash *slash,
+static int win_payload_send_request_raw_once(struct slash *slash,
                                 unsigned int node,
                                 unsigned int timeout,
                                 uint8_t cmd,
@@ -33,7 +33,8 @@ int win_payload_send_request_raw_ex(struct slash *slash,
                                 int verbose,
                                 uint8_t *resp_status_out,
                                 char *resp_text_out,
-                                size_t resp_text_sz) {
+                                size_t resp_text_sz,
+                                int quiet_transient) {
     csp_conn_t *conn;
     csp_packet_t *pkt;
     csp_packet_t *reply;
@@ -52,8 +53,9 @@ int win_payload_send_request_raw_ex(struct slash *slash,
 
     conn = csp_connect(CSP_PRIO_NORM, (uint16_t) node, PAYLOAD_CMD_PORT, timeout, CSP_O_NONE);
     if (!conn) {
-        slash_printf(slash, "Failed to connect to node %u port %u\n", node, PAYLOAD_CMD_PORT);
-        return -1;
+        if (!quiet_transient)
+            slash_printf(slash, "Failed to connect to node %u port %u\n", node, PAYLOAD_CMD_PORT);
+        return 1;
     }
 
     pkt = csp_buffer_get(sizeof(win_payload_req_t));
@@ -86,13 +88,15 @@ int win_payload_send_request_raw_ex(struct slash *slash,
 
     reply = csp_read(conn, timeout);
     if (!reply) {
-        slash_printf(slash, "No reply from node %u\n", node);
+        if (!quiet_transient)
+            slash_printf(slash, "No reply from node %u\n", node);
         csp_close(conn);
         return 1;
     }
 
     if (reply->length < offsetof(win_payload_resp_t, data)) {
-        slash_printf(slash, "Short reply from node %u\n", node);
+        if (!quiet_transient)
+            slash_printf(slash, "Short reply from node %u\n", node);
         csp_buffer_free(reply);
         csp_close(conn);
         return 1;
@@ -101,14 +105,16 @@ int win_payload_send_request_raw_ex(struct slash *slash,
     resp = (win_payload_resp_t *) reply->data;
 
     if (resp->data_len >= sizeof(resp->data)) {
-        slash_printf(slash, "Malformed reply from node %u\n", node);
+        if (!quiet_transient)
+            slash_printf(slash, "Malformed reply from node %u\n", node);
         csp_buffer_free(reply);
         csp_close(conn);
         return 1;
     }
 
     if (reply->length < offsetof(win_payload_resp_t, data) + resp->data_len + 1) {
-        slash_printf(slash, "Truncated reply from node %u\n", node);
+        if (!quiet_transient)
+            slash_printf(slash, "Truncated reply from node %u\n", node);
         csp_buffer_free(reply);
         csp_close(conn);
         return 1;
@@ -132,6 +138,74 @@ int win_payload_send_request_raw_ex(struct slash *slash,
     return 0;
 }
 
+int win_payload_send_request_raw_ex(struct slash *slash,
+                                unsigned int node,
+                                unsigned int timeout,
+                                uint8_t cmd,
+                                const void *arg,
+                                size_t arg_len,
+                                int expect_reply,
+                                int verbose,
+                                uint8_t *resp_status_out,
+                                char *resp_text_out,
+                                size_t resp_text_sz) {
+    return win_payload_send_request_raw_once(slash,
+                                             node,
+                                             timeout,
+                                             cmd,
+                                             arg,
+                                             arg_len,
+                                             expect_reply,
+                                             verbose,
+                                             resp_status_out,
+                                             resp_text_out,
+                                             resp_text_sz,
+                                             0);
+}
+
+int win_payload_send_request_raw_retry_ex(struct slash *slash,
+                                unsigned int node,
+                                unsigned int timeout,
+                                uint8_t cmd,
+                                const void *arg,
+                                size_t arg_len,
+                                int expect_reply,
+                                int verbose,
+                                uint8_t *resp_status_out,
+                                char *resp_text_out,
+                                size_t resp_text_sz) {
+    unsigned int attempt;
+    unsigned int max_attempts = expect_reply ? WIN_PAYLOAD_CMD_MAX_RETRIES : 1;
+    int rc = -1;
+
+    for (attempt = 1; attempt <= max_attempts; attempt++) {
+        rc = win_payload_send_request_raw_once(slash,
+                                               node,
+                                               timeout,
+                                               cmd,
+                                               arg,
+                                               arg_len,
+                                               expect_reply,
+                                               verbose,
+                                               resp_status_out,
+                                               resp_text_out,
+                                               resp_text_sz,
+                                               1);
+        if (rc == 0 || rc < 0)
+            return rc;
+
+        if (attempt < max_attempts)
+            slash_printf(slash, "retrying same command (attempt %u/%u)\n",
+                         attempt + 1, max_attempts);
+    }
+
+    slash_printf(slash,
+                 "win_payload cmd %u failed after %u attempts\n",
+                 (unsigned int) cmd,
+                 max_attempts);
+    return rc;
+}
+
 int win_payload_send_request(struct slash *slash,
                          unsigned int node,
                          unsigned int timeout,
@@ -146,6 +220,20 @@ int win_payload_send_request(struct slash *slash,
                                        1, 1, NULL, NULL, 0);
 }
 
+int win_payload_send_request_retry(struct slash *slash,
+                         unsigned int node,
+                         unsigned int timeout,
+                         uint8_t cmd,
+                         const char *arg) {
+    size_t arg_len = 0;
+
+    if (arg != NULL)
+        arg_len = strlen(arg);
+
+    return win_payload_send_request_raw_retry_ex(slash, node, timeout, cmd, arg, arg_len,
+                                       1, 1, NULL, NULL, 0);
+}
+
 int win_payload_query_remote_offset(struct slash *slash,
                                 unsigned int node,
                                 unsigned int timeout,
@@ -156,7 +244,7 @@ int win_payload_query_remote_offset(struct slash *slash,
     char reply[256];
     int rc;
 
-    rc = win_payload_send_request_raw_ex(slash, node, timeout,
+    rc = win_payload_send_request_raw_retry_ex(slash, node, timeout,
                                      CMD_PUT_FILE_QUERY,
                                      remote_name, strlen(remote_name),
                                      1, verbose, &status, reply, sizeof(reply));
@@ -176,7 +264,7 @@ int win_payload_query_remote_size(struct slash *slash,
     char reply[256];
     int rc;
 
-    rc = win_payload_send_request_raw_ex(slash, node, timeout,
+    rc = win_payload_send_request_raw_retry_ex(slash, node, timeout,
                                      CMD_GET_FILE_INFO,
                                      remote_name, strlen(remote_name),
                                      1, verbose, &status, reply, sizeof(reply));
@@ -331,7 +419,7 @@ int win_payload_list_files_page(struct slash *slash,
         arg_len += dir_len;
     }
 
-    rc = win_payload_send_request_raw_ex(slash, node, timeout,
+    rc = win_payload_send_request_raw_retry_ex(slash, node, timeout,
                                      CMD_LIST_FILES,
                                      arg_buf, arg_len,
                                      1, 0, &status, reply, sizeof(reply));

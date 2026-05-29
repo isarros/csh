@@ -19,7 +19,25 @@ int win_payload_send_request_raw_ex(struct slash *slash,
                                 char *resp_text_out,
                                 size_t resp_text_sz);
 
+int win_payload_send_request_raw_retry_ex(struct slash *slash,
+                                unsigned int node,
+                                unsigned int timeout,
+                                uint8_t cmd,
+                                const void *arg,
+                                size_t arg_len,
+                                int expect_reply,
+                                int verbose,
+                                uint8_t *resp_status_out,
+                                char *resp_text_out,
+                                size_t resp_text_sz);
+
 int win_payload_send_request(struct slash *slash,
+                         unsigned int node,
+                         unsigned int timeout,
+                         uint8_t cmd,
+                         const char *arg);
+
+int win_payload_send_request_retry(struct slash *slash,
                          unsigned int node,
                          unsigned int timeout,
                          uint8_t cmd,

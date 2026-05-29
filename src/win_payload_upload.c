@@ -222,7 +222,7 @@ int win_payload_put_file_cmd_impl(struct slash *slash) {
         memcpy(begin_buf + sizeof(uint32_t), &start_offset, sizeof(uint32_t));
         memcpy(begin_buf + sizeof(uint32_t) + sizeof(uint32_t), remote_name, remote_len + 1);
 
-        rc = win_payload_send_request_raw_ex(slash, node, upload_timeout,
+        rc = win_payload_send_request_raw_retry_ex(slash, node, upload_timeout,
                                              CMD_PUT_FILE_BEGIN,
                                              begin_buf, begin_len,
                                              1, 1, &status, NULL, 0);
@@ -299,7 +299,7 @@ int win_payload_put_file_cmd_impl(struct slash *slash) {
     fclose(fp);
     slash_printf(slash, "sent %lu bytes, finalizing...\n", (unsigned long) offset);
 
-    rc = win_payload_send_request_raw_ex(slash, node, upload_timeout,
+    rc = win_payload_send_request_raw_retry_ex(slash, node, upload_timeout,
                                          CMD_PUT_FILE_END,
                                          &session_id, sizeof(session_id),
                                          1, 1, &status, NULL, 0);

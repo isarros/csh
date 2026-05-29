@@ -17,14 +17,15 @@ slash_command_group(set, "Set payload options");
 slash_command_group(get, "Get payload values");
 
 static int win_payload_get_state_cmd(struct slash *slash) {
-    return win_payload_send_request(slash, slash_dfl_node, slash_dfl_timeout, CMD_GET_STATE, NULL);
+    return win_payload_send_request_retry(slash, slash_dfl_node, slash_dfl_timeout, CMD_GET_STATE, NULL);
 }
 slash_command_sub(win_payload, get_state, win_payload_get_state_cmd, "", "Get win_payload state");
 
 static int win_payload_send_start_app(struct slash *slash,
                                       const char *app,
                                       const char *config_path,
-                                      int verbose) {
+                                      int verbose,
+                                      int retry) {
     uint8_t arg_buf[PAYLOAD_MAX_ARG_LEN];
     size_t app_len;
     size_t config_len;
@@ -42,6 +43,20 @@ static int win_payload_send_start_app(struct slash *slash,
     memcpy(arg_buf, app, app_len + 1);
     memcpy(arg_buf + app_len + 1, config_path, config_len + 1);
 
+    if (retry) {
+        return win_payload_send_request_raw_retry_ex(slash,
+                                                     slash_dfl_node,
+                                                     slash_dfl_timeout,
+                                                     CMD_START_APP,
+                                                     arg_buf,
+                                                     arg_len,
+                                                     1,
+                                                     verbose,
+                                                     NULL,
+                                                     NULL,
+                                                     0);
+    }
+
     return win_payload_send_request_raw_ex(slash,
                                            slash_dfl_node,
                                            slash_dfl_timeout,
@@ -57,7 +72,22 @@ static int win_payload_send_start_app(struct slash *slash,
 
 static int win_payload_send_stop_app(struct slash *slash,
                                      const char *app,
-                                     int verbose) {
+                                     int verbose,
+                                     int retry) {
+    if (retry) {
+        return win_payload_send_request_raw_retry_ex(slash,
+                                                     slash_dfl_node,
+                                                     slash_dfl_timeout,
+                                                     CMD_STOP_APP,
+                                                     app,
+                                                     strlen(app),
+                                                     1,
+                                                     verbose,
+                                                     NULL,
+                                                     NULL,
+                                                     0);
+    }
+
     return win_payload_send_request_raw_ex(slash,
                                            slash_dfl_node,
                                            slash_dfl_timeout,
@@ -77,7 +107,7 @@ static int win_payload_start_cmd(struct slash *slash) {
         return SLASH_EINVAL;
     }
 
-    return win_payload_send_start_app(slash, slash->argv[1], slash->argv[2], 1);
+    return win_payload_send_start_app(slash, slash->argv[1], slash->argv[2], 1, 0);
 }
 slash_command_sub(win_payload, start, win_payload_start_cmd, "<app> <nsr_path>", "Start win_payload app");
 
@@ -86,7 +116,7 @@ static int win_payload_stop_cmd(struct slash *slash) {
         slash_printf(slash, "Usage: win_payload stop <app>\n");
         return SLASH_EINVAL;
     }
-    return win_payload_send_stop_app(slash, slash->argv[1], 1);
+    return win_payload_send_stop_app(slash, slash->argv[1], 1, 0);
 }
 slash_command_sub(win_payload, stop, win_payload_stop_cmd, "<app>", "Stop win_payload app");
 
@@ -119,7 +149,7 @@ static int set_mode_cmd(struct slash *slash) {
     }
 
     if (strcmp(slash->argv[1], "0") == 0) {
-        return win_payload_send_stop_app(slash, WIN_PAYLOAD_APP_INDALOS, 1);
+        return win_payload_send_stop_app(slash, WIN_PAYLOAD_APP_INDALOS, 1, 1);
     }
 
     if (strcmp(slash->argv[1], "1") == 0) {
@@ -128,7 +158,7 @@ static int set_mode_cmd(struct slash *slash) {
             return SLASH_EINVAL;
         }
 
-        return win_payload_send_start_app(slash, WIN_PAYLOAD_APP_INDALOS, g_nsr_config_path, 1);
+        return win_payload_send_start_app(slash, WIN_PAYLOAD_APP_INDALOS, g_nsr_config_path, 1, 1);
     }
 
     slash_printf(slash, "Usage: set mode <0|1>\n");
@@ -141,7 +171,7 @@ static int get_state_cmd(struct slash *slash) {
     char reply[256];
     int rc;
 
-    rc = win_payload_send_request_raw_ex(slash,
+    rc = win_payload_send_request_raw_retry_ex(slash,
                                          slash_dfl_node,
                                          slash_dfl_timeout,
                                          CMD_GET_STATE,
@@ -186,7 +216,7 @@ static int win_payload_clear_testfolder_cmd(struct slash *slash) {
         slash_printf(slash, "Usage: win_payload clear_testfolder CONFIRM\n");
         return SLASH_EINVAL;
     }
-    return win_payload_send_request(slash, slash_dfl_node, slash_dfl_timeout, CMD_CLEAR_TESTFOLDER, slash->argv[1]);
+    return win_payload_send_request_retry(slash, slash_dfl_node, slash_dfl_timeout, CMD_CLEAR_TESTFOLDER, slash->argv[1]);
 }
 slash_command_sub(win_payload, clear_testfolder, win_payload_clear_testfolder_cmd, "CONFIRM", "Clear contents of the Windows test folder");
 
@@ -326,7 +356,7 @@ static int win_payload_create_folder_cmd(struct slash *slash) {
         return SLASH_EINVAL;
     }
 
-    if (win_payload_send_request(slash,
+    if (win_payload_send_request_retry(slash,
                                  slash_dfl_node,
                                  slash_dfl_timeout,
                                  CMD_CREATE_FOLDER,
