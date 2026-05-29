@@ -36,6 +36,17 @@ typedef enum {
     CMD_DELETE_FOLDER    = 17
 } win_payload_cmd_t;
 
+typedef enum {
+    RESP_OK               = 0,
+    RESP_ERR_BAD_PACKET   = 1,
+    RESP_ERR_UNKNOWN_CMD  = 2,
+    RESP_ERR_BAD_ARG      = 3,
+    RESP_ERR_NOT_FOUND    = 4,
+    RESP_ERR_ALREADY_RUN  = 5,
+    RESP_ERR_NOT_RUNNING  = 6,
+    RESP_ERR_OS_FAILED    = 7
+} win_payload_status_t;
+
 #pragma pack(push, 1)
 typedef struct {
     uint8_t  cmd;

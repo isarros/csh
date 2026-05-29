@@ -30,6 +30,9 @@ static int win_payload_send_start_app(struct slash *slash,
     size_t app_len;
     size_t config_len;
     size_t arg_len;
+    uint8_t status = RESP_OK;
+    char reply[256];
+    int rc;
 
     app_len = strlen(app);
     config_len = strlen(config_path);
@@ -44,17 +47,31 @@ static int win_payload_send_start_app(struct slash *slash,
     memcpy(arg_buf + app_len + 1, config_path, config_len + 1);
 
     if (retry) {
-        return win_payload_send_request_raw_retry_ex(slash,
-                                                     slash_dfl_node,
-                                                     slash_dfl_timeout,
-                                                     CMD_START_APP,
-                                                     arg_buf,
-                                                     arg_len,
-                                                     1,
-                                                     verbose,
-                                                     NULL,
-                                                     NULL,
-                                                     0);
+        rc = win_payload_send_request_raw_retry_ex(slash,
+                                                   slash_dfl_node,
+                                                   slash_dfl_timeout,
+                                                   CMD_START_APP,
+                                                   arg_buf,
+                                                   arg_len,
+                                                   1,
+                                                   0,
+                                                   &status,
+                                                   reply,
+                                                   sizeof(reply));
+        if (rc != 0)
+            return rc;
+
+        if (status == RESP_OK || status == RESP_ERR_ALREADY_RUN) {
+            if (verbose)
+                slash_printf(slash, "%s\n", reply);
+            return SLASH_SUCCESS;
+        }
+
+        if (verbose) {
+            slash_printf(slash, "status=%u\n", status);
+            slash_printf(slash, "%s\n", reply);
+        }
+        return SLASH_SUCCESS;
     }
 
     return win_payload_send_request_raw_ex(slash,
@@ -74,18 +91,36 @@ static int win_payload_send_stop_app(struct slash *slash,
                                      const char *app,
                                      int verbose,
                                      int retry) {
+    uint8_t status = RESP_OK;
+    char reply[256];
+    int rc;
+
     if (retry) {
-        return win_payload_send_request_raw_retry_ex(slash,
-                                                     slash_dfl_node,
-                                                     slash_dfl_timeout,
-                                                     CMD_STOP_APP,
-                                                     app,
-                                                     strlen(app),
-                                                     1,
-                                                     verbose,
-                                                     NULL,
-                                                     NULL,
-                                                     0);
+        rc = win_payload_send_request_raw_retry_ex(slash,
+                                                   slash_dfl_node,
+                                                   slash_dfl_timeout,
+                                                   CMD_STOP_APP,
+                                                   app,
+                                                   strlen(app),
+                                                   1,
+                                                   0,
+                                                   &status,
+                                                   reply,
+                                                   sizeof(reply));
+        if (rc != 0)
+            return rc;
+
+        if (status == RESP_OK || status == RESP_ERR_NOT_RUNNING) {
+            if (verbose)
+                slash_printf(slash, "%s\n", reply);
+            return SLASH_SUCCESS;
+        }
+
+        if (verbose) {
+            slash_printf(slash, "status=%u\n", status);
+            slash_printf(slash, "%s\n", reply);
+        }
+        return SLASH_SUCCESS;
     }
 
     return win_payload_send_request_raw_ex(slash,
