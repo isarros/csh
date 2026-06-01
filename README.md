@@ -1,7 +1,7 @@
-# CSH Playground for Windows
+# CSH for Windows
 
 ## Overview
-CSP playground - Windows version. Refer to https://github.com/GATE-Space/csp-playground/blob/csp-playground-windows-v2/README.md for a full usage example.
+CSP - Custom commands for Windows. Refer to https://github.com/GATE-Space/csp-playground/blob/csp-playground-windows-v2/README.md for a full usage example.
 
 ## Install the dependencies
 ```
