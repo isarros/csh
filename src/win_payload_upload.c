@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stddef.h>
+#include <errno.h>
 
 #include <apm/csh_api.h>
 
@@ -68,6 +69,29 @@ static int win_payload_is_absolute_windows_path(const char *path) {
     if (isalpha(c0) && path[1] == ':' && (path[2] == '\\' || path[2] == '/'))
         return 1;
 
+    return 0;
+}
+
+static int parse_u32_arg(struct slash *slash,
+                         const char *name,
+                         const char *text,
+                         uint32_t *value_out) {
+    unsigned long value;
+    char *end = NULL;
+
+    if (text == NULL || text[0] == '\0' || text[0] == '-') {
+        slash_printf(slash, "Invalid %s\n", name);
+        return -1;
+    }
+
+    errno = 0;
+    value = strtoul(text, &end, 0);
+    if (errno != 0 || end == text || *end != '\0' || value > 0xFFFFFFFFUL) {
+        slash_printf(slash, "Invalid %s\n", name);
+        return -1;
+    }
+
+    *value_out = (uint32_t) value;
     return 0;
 }
 
@@ -146,19 +170,29 @@ int win_payload_put_file_cmd_impl(struct slash *slash) {
     uint32_t file_size;
     uint32_t remote_offset = 0;
     uint32_t start_offset = 0;
+    uint32_t end_offset = 0;
+    uint32_t requested_size = 0;
     uint32_t session_id;
     uint32_t chunk_index;
     uint32_t offset;
     uint8_t status = 0;
+    int manual_range = 0;
     int rc;
 
-    if (slash->argc < 2) {
-        slash_printf(slash, "Usage: win_payload put_file <local_path> [remote_name_or_full_path]\n");
+    if (slash->argc < 2 || slash->argc > 5 || slash->argc == 4) {
+        slash_printf(slash, "Usage: win_payload put_file <local_path> [remote_name_or_full_path] [size] [offset]\n");
         return SLASH_EINVAL;
     }
 
     local_path = slash->argv[1];
     remote_name = (slash->argc >= 3) ? slash->argv[2] : win_payload_basename(local_path);
+    if (slash->argc == 5) {
+        if (parse_u32_arg(slash, "size", slash->argv[3], &requested_size) != 0 ||
+            parse_u32_arg(slash, "offset", slash->argv[4], &start_offset) != 0) {
+            return SLASH_EINVAL;
+        }
+        manual_range = 1;
+    }
 
     if (win_payload_validate_remote_get_path(remote_name) != 0) {
         slash_printf(slash, "Invalid remote destination path\n");
@@ -187,21 +221,45 @@ int win_payload_put_file_cmd_impl(struct slash *slash) {
     file_size = (uint32_t) file_size_long;
     rewind(fp);
 
-    if (win_payload_query_remote_offset(slash, node, upload_timeout, remote_name, &remote_offset, 0) != 0) {
-        fclose(fp);
-        return SLASH_SUCCESS;
-    }
+    if (manual_range) {
+        if (requested_size == 0) {
+            slash_printf(slash, "Manual upload size must be greater than 0\n");
+            fclose(fp);
+            return SLASH_EINVAL;
+        }
 
-    start_offset = remote_offset;
+        if (start_offset > file_size) {
+            slash_printf(slash, "Manual upload offset beyond local file\n");
+            fclose(fp);
+            return SLASH_EINVAL;
+        }
 
-    if (start_offset > file_size) {
-        slash_printf(slash, "Remote offset beyond local file, restarting from 0\n");
-        start_offset = 0;
-    }
+        if (requested_size > (file_size - start_offset)) {
+            slash_printf(slash, "Manual upload range exceeds local file size\n");
+            fclose(fp);
+            return SLASH_EINVAL;
+        }
 
-    if ((start_offset % UPLOAD_CHUNK_SIZE) != 0 && start_offset != file_size) {
-        slash_printf(slash, "Remote offset is not chunk-aligned, restarting from 0\n");
-        start_offset = 0;
+        end_offset = start_offset + requested_size;
+    } else {
+        if (win_payload_query_remote_offset(slash, node, upload_timeout, remote_name, &remote_offset, 0) != 0) {
+            fclose(fp);
+            return SLASH_SUCCESS;
+        }
+
+        start_offset = remote_offset;
+
+        if (start_offset > file_size) {
+            slash_printf(slash, "Remote offset beyond local file, restarting from 0\n");
+            start_offset = 0;
+        }
+
+        if ((start_offset % UPLOAD_CHUNK_SIZE) != 0 && start_offset != file_size) {
+            slash_printf(slash, "Remote offset is not chunk-aligned, restarting from 0\n");
+            start_offset = 0;
+        }
+
+        end_offset = file_size;
     }
 
     srand((unsigned int) time(NULL) ^ (unsigned int) getpid());
@@ -232,18 +290,32 @@ int win_payload_put_file_cmd_impl(struct slash *slash) {
         }
     }
 
-    if (fseek(fp, (long) start_offset, SEEK_SET) != 0) {
-        slash_printf(slash, "Failed to seek local file to resume offset\n");
-        fclose(fp);
-        return SLASH_SUCCESS;
+    if (manual_range) {
+        if (fseek(fp, (long) start_offset, SEEK_SET) != 0) {
+            slash_printf(slash, "Failed to seek local file to manual offset\n");
+            fclose(fp);
+            return SLASH_SUCCESS;
+        }
+    } else {
+        if (fseek(fp, (long) start_offset, SEEK_SET) != 0) {
+            slash_printf(slash, "Failed to seek local file to resume offset\n");
+            fclose(fp);
+            return SLASH_SUCCESS;
+        }
     }
 
     chunk_index = start_offset / UPLOAD_CHUNK_SIZE;
     offset = start_offset;
-    slash_printf(slash, "upload resume offset: %lu\n", (unsigned long) start_offset);
+    if (manual_range) {
+        slash_printf(slash, "upload manual range: offset=%lu size=%lu\n",
+                     (unsigned long) start_offset,
+                     (unsigned long) requested_size);
+    } else {
+        slash_printf(slash, "upload resume offset: %lu\n", (unsigned long) start_offset);
+    }
 
-    while (offset < file_size) {
-        size_t remaining = (size_t) (file_size - offset);
+    while (offset < end_offset) {
+        size_t remaining = (size_t) (end_offset - offset);
         size_t nread = (remaining > UPLOAD_CHUNK_SIZE) ? UPLOAD_CHUNK_SIZE : remaining;
         win_payload_file_chunk_t chunk;
         int tries = 0;
@@ -297,7 +369,9 @@ int win_payload_put_file_cmd_impl(struct slash *slash) {
     }
 
     fclose(fp);
-    slash_printf(slash, "sent %lu bytes, finalizing...\n", (unsigned long) offset);
+    slash_printf(slash, "sent %lu bytes, final offset %lu, finalizing...\n",
+                 (unsigned long) (offset - start_offset),
+                 (unsigned long) offset);
 
     rc = win_payload_send_request_raw_retry_ex(slash, node, upload_timeout,
                                          CMD_PUT_FILE_END,
@@ -416,6 +490,12 @@ int win_payload_get_file_cmd_impl(struct slash *slash) {
         if (chunk.data_len > 0) {
             if (fwrite(chunk.data, 1, chunk.data_len, fp) != chunk.data_len) {
                 slash_printf(slash, "Failed to write local file\n");
+                fclose(fp);
+                return SLASH_SUCCESS;
+            }
+
+            if (fflush(fp) != 0 || fsync(fileno(fp)) != 0) {
+                slash_printf(slash, "Failed to sync local output file\n");
                 fclose(fp);
                 return SLASH_SUCCESS;
             }

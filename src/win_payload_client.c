@@ -8,6 +8,8 @@
 
 #include <csp/csp.h>
 
+#define WIN_PAYLOAD_RETRYABLE_FAILURE 2
+
 static int win_payload_parse_numeric_reply(struct slash *slash,
                                        const char *reply,
                                        const char *prefix,
@@ -55,7 +57,7 @@ static int win_payload_send_request_raw_once(struct slash *slash,
     if (!conn) {
         if (!quiet_transient)
             slash_printf(slash, "Failed to connect to node %u port %u\n", node, PAYLOAD_CMD_PORT);
-        return 1;
+        return WIN_PAYLOAD_RETRYABLE_FAILURE;
     }
 
     pkt = csp_buffer_get(sizeof(win_payload_req_t));
@@ -91,7 +93,7 @@ static int win_payload_send_request_raw_once(struct slash *slash,
         if (!quiet_transient)
             slash_printf(slash, "No reply from node %u\n", node);
         csp_close(conn);
-        return 1;
+        return WIN_PAYLOAD_RETRYABLE_FAILURE;
     }
 
     if (reply->length < offsetof(win_payload_resp_t, data)) {
@@ -99,7 +101,7 @@ static int win_payload_send_request_raw_once(struct slash *slash,
             slash_printf(slash, "Short reply from node %u\n", node);
         csp_buffer_free(reply);
         csp_close(conn);
-        return 1;
+        return WIN_PAYLOAD_RETRYABLE_FAILURE;
     }
 
     resp = (win_payload_resp_t *) reply->data;
@@ -109,7 +111,7 @@ static int win_payload_send_request_raw_once(struct slash *slash,
             slash_printf(slash, "Malformed reply from node %u\n", node);
         csp_buffer_free(reply);
         csp_close(conn);
-        return 1;
+        return WIN_PAYLOAD_RETRYABLE_FAILURE;
     }
 
     if (reply->length < offsetof(win_payload_resp_t, data) + resp->data_len + 1) {
@@ -117,7 +119,7 @@ static int win_payload_send_request_raw_once(struct slash *slash,
             slash_printf(slash, "Truncated reply from node %u\n", node);
         csp_buffer_free(reply);
         csp_close(conn);
-        return 1;
+        return WIN_PAYLOAD_RETRYABLE_FAILURE;
     }
 
     resp->data[resp->data_len] = '\0';
@@ -149,18 +151,24 @@ int win_payload_send_request_raw_ex(struct slash *slash,
                                 uint8_t *resp_status_out,
                                 char *resp_text_out,
                                 size_t resp_text_sz) {
-    return win_payload_send_request_raw_once(slash,
-                                             node,
-                                             timeout,
-                                             cmd,
-                                             arg,
-                                             arg_len,
-                                             expect_reply,
-                                             verbose,
-                                             resp_status_out,
-                                             resp_text_out,
-                                             resp_text_sz,
-                                             0);
+    int rc;
+
+    rc = win_payload_send_request_raw_once(slash,
+                                           node,
+                                           timeout,
+                                           cmd,
+                                           arg,
+                                           arg_len,
+                                           expect_reply,
+                                           verbose,
+                                           resp_status_out,
+                                           resp_text_out,
+                                           resp_text_sz,
+                                           0);
+    if (rc == WIN_PAYLOAD_RETRYABLE_FAILURE)
+        return SLASH_EIO;
+
+    return rc;
 }
 
 int win_payload_send_request_raw_retry_ex(struct slash *slash,
@@ -203,6 +211,9 @@ int win_payload_send_request_raw_retry_ex(struct slash *slash,
                  "win_payload cmd %u failed after %u attempts\n",
                  (unsigned int) cmd,
                  max_attempts);
+    if (rc == WIN_PAYLOAD_RETRYABLE_FAILURE)
+        return SLASH_EIO;
+
     return rc;
 }
 

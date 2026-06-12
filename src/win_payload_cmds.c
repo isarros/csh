@@ -136,7 +136,7 @@ static int win_payload_start_cmd(struct slash *slash) {
         return SLASH_EINVAL;
     }
 
-    return win_payload_send_start_app(slash, slash->argv[1], slash->argv[2], 1, 0);
+    return win_payload_send_start_app(slash, slash->argv[1], slash->argv[2], 1, 1);
 }
 slash_command_sub(win_payload, start, win_payload_start_cmd, "<app> <nsr_path>", "Start win_payload app");
 
@@ -145,7 +145,7 @@ static int win_payload_stop_cmd(struct slash *slash) {
         slash_printf(slash, "Usage: win_payload stop <app>\n");
         return SLASH_EINVAL;
     }
-    return win_payload_send_stop_app(slash, slash->argv[1], 1, 0);
+    return win_payload_send_stop_app(slash, slash->argv[1], 1, 1);
 }
 slash_command_sub(win_payload, stop, win_payload_stop_cmd, "<app>", "Stop win_payload app");
 
@@ -182,7 +182,7 @@ slash_command_sub(win_payload, query_file, win_payload_query_file_cmd, "<remote_
 static int win_payload_put_file_cmd(struct slash *slash) {
     return win_payload_put_file_cmd_impl(slash);
 }
-slash_command_sub(win_payload, put_file, win_payload_put_file_cmd, "<local_path> [remote_name_or_full_path]", "Upload a file to Windows with resume");
+slash_command_sub(win_payload, put_file, win_payload_put_file_cmd, "<local_path> [remote_name_or_full_path] [size] [offset]", "Upload a file to Windows with resume");
 
 static int win_payload_get_file_cmd(struct slash *slash) {
     return win_payload_get_file_cmd_impl(slash);
