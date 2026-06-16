@@ -394,14 +394,25 @@ int win_payload_get_file_cmd_impl(struct slash *slash) {
     long local_size_long = 0;
     uint32_t remote_size = 0;
     uint32_t offset = 0;
+    uint32_t start_offset = 0;
+    uint32_t end_offset = 0;
+    uint32_t requested_size = 0;
+    int manual_range = 0;
 
-    if (slash->argc < 2) {
-        slash_printf(slash, "Usage: win_payload get_file <remote_name_or_full_path> [local_path]\n");
+    if (slash->argc < 2 || slash->argc > 5 || slash->argc == 4) {
+        slash_printf(slash, "Usage: win_payload get_file <remote_name_or_full_path> [local_path] [size] [offset]\n");
         return SLASH_EINVAL;
     }
 
     remote_name = slash->argv[1];
     local_path = (slash->argc >= 3) ? slash->argv[2] : win_payload_basename(remote_name);
+    if (slash->argc == 5) {
+        if (parse_u32_arg(slash, "size", slash->argv[3], &requested_size) != 0 ||
+            parse_u32_arg(slash, "offset", slash->argv[4], &start_offset) != 0) {
+            return SLASH_EINVAL;
+        }
+        manual_range = 1;
+    }
 
     if (win_payload_validate_remote_get_path(remote_name) != 0) {
         slash_printf(slash, "Invalid remote path\n");
@@ -411,47 +422,84 @@ int win_payload_get_file_cmd_impl(struct slash *slash) {
     if (win_payload_query_remote_size(slash, node, download_timeout, remote_name, &remote_size, 1) != 0)
         return SLASH_SUCCESS;
 
-    probe = fopen(local_path, "rb");
-    if (probe) {
-        if (fseek(probe, 0, SEEK_END) != 0) {
-            slash_printf(slash, "Failed to seek local file\n");
+    if (manual_range) {
+        if (requested_size == 0) {
+            slash_printf(slash, "Manual download size must be greater than 0\n");
+            return SLASH_EINVAL;
+        }
+
+        if (start_offset > remote_size) {
+            slash_printf(slash, "Manual download offset beyond remote file\n");
+            return SLASH_EINVAL;
+        }
+
+        if (requested_size > (remote_size - start_offset)) {
+            slash_printf(slash, "Manual download range exceeds remote file size\n");
+            return SLASH_EINVAL;
+        }
+
+        offset = start_offset;
+        end_offset = start_offset + requested_size;
+
+        fp = fopen(local_path, "r+b");
+        if (!fp)
+            fp = fopen(local_path, "w+b");
+    } else {
+        probe = fopen(local_path, "rb");
+        if (probe) {
+            if (fseek(probe, 0, SEEK_END) != 0) {
+                slash_printf(slash, "Failed to seek local file\n");
+                fclose(probe);
+                return SLASH_SUCCESS;
+            }
+
+            local_size_long = ftell(probe);
             fclose(probe);
-            return SLASH_SUCCESS;
+
+            if (local_size_long < 0 || local_size_long > 0x7FFFFFFFL) {
+                slash_printf(slash, "Invalid local file size\n");
+                return SLASH_SUCCESS;
+            }
+
+            offset = (uint32_t) local_size_long;
         }
 
-        local_size_long = ftell(probe);
-        fclose(probe);
-
-        if (local_size_long < 0 || local_size_long > 0x7FFFFFFFL) {
-            slash_printf(slash, "Invalid local file size\n");
-            return SLASH_SUCCESS;
+        if (offset > remote_size) {
+            slash_printf(slash, "Local file is larger than remote file, restarting from 0\n");
+            offset = 0;
         }
 
-        offset = (uint32_t) local_size_long;
+        end_offset = remote_size;
+        fp = fopen(local_path, (offset > 0) ? "ab" : "wb");
     }
-
-    if (offset > remote_size) {
-        slash_printf(slash, "Local file is larger than remote file, restarting from 0\n");
-        offset = 0;
-    }
-
-    fp = fopen(local_path, (offset > 0) ? "ab" : "wb");
     if (!fp) {
         slash_printf(slash, "Failed to open local output file: %s\n", local_path);
         return SLASH_SUCCESS;
     }
 
-    slash_printf(slash, "download resume offset: %lu / %lu\n",
-                 (unsigned long) offset,
-                 (unsigned long) remote_size);
+    if (manual_range) {
+        if (fseek(fp, (long) start_offset, SEEK_SET) != 0) {
+            slash_printf(slash, "Failed to seek local file to manual offset\n");
+            fclose(fp);
+            return SLASH_SUCCESS;
+        }
 
-    while (offset < remote_size) {
+        slash_printf(slash, "download manual range: offset=%lu size=%lu\n",
+                     (unsigned long) start_offset,
+                     (unsigned long) requested_size);
+    } else {
+        slash_printf(slash, "download resume offset: %lu / %lu\n",
+                     (unsigned long) offset,
+                     (unsigned long) remote_size);
+    }
+
+    while (offset < end_offset) {
         win_payload_file_read_resp_t chunk;
         int tries = 0;
         int got_chunk = 0;
 
         while (!got_chunk && tries < DOWNLOAD_MAX_RETRIES) {
-        if (win_payload_get_file_chunk(slash, node, download_timeout, remote_name, offset, &chunk) == 0) {
+            if (win_payload_get_file_chunk(slash, node, download_timeout, remote_name, offset, &chunk) == 0) {
                 got_chunk = 1;
                 break;
             }
@@ -488,7 +536,10 @@ int win_payload_get_file_cmd_impl(struct slash *slash) {
         }
 
         if (chunk.data_len > 0) {
-            if (fwrite(chunk.data, 1, chunk.data_len, fp) != chunk.data_len) {
+            size_t remaining = (size_t) (end_offset - offset);
+            size_t write_len = (chunk.data_len > remaining) ? remaining : chunk.data_len;
+
+            if (fwrite(chunk.data, 1, write_len, fp) != write_len) {
                 slash_printf(slash, "Failed to write local file\n");
                 fclose(fp);
                 return SLASH_SUCCESS;
@@ -501,12 +552,12 @@ int win_payload_get_file_cmd_impl(struct slash *slash) {
             }
 
             slash_printf(slash, "received %u bytes, offset now %lu / %lu\n",
-                         (unsigned int) chunk.data_len,
-                         (unsigned long) (offset + chunk.data_len),
-                         (unsigned long) remote_size);
-        }
+                         (unsigned int) write_len,
+                         (unsigned long) (offset + write_len),
+                         (unsigned long) end_offset);
 
-        offset += chunk.data_len;
+            offset += (uint32_t) write_len;
+        }
 
         if (chunk.eof)
             break;
@@ -514,16 +565,23 @@ int win_payload_get_file_cmd_impl(struct slash *slash) {
 
     fclose(fp);
 
-    if (offset != remote_size) {
-        slash_printf(slash, "Download ended at %lu but remote size is %lu\n",
+    if (offset != end_offset) {
+        slash_printf(slash, "Download ended at %lu but expected %lu\n",
                      (unsigned long) offset,
-                     (unsigned long) remote_size);
+                     (unsigned long) end_offset);
         return SLASH_SUCCESS;
     }
 
-    slash_printf(slash, "download complete: %s (%lu bytes)\n",
-                 local_path,
-                 (unsigned long) offset);
+    if (manual_range) {
+        slash_printf(slash, "download complete: %s (%lu bytes, final offset %lu)\n",
+                     local_path,
+                     (unsigned long) (offset - start_offset),
+                     (unsigned long) offset);
+    } else {
+        slash_printf(slash, "download complete: %s (%lu bytes)\n",
+                     local_path,
+                     (unsigned long) offset);
+    }
     return SLASH_SUCCESS;
 }
 

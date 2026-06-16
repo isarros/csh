@@ -187,7 +187,7 @@ slash_command_sub(win_payload, put_file, win_payload_put_file_cmd, "<local_path>
 static int win_payload_get_file_cmd(struct slash *slash) {
     return win_payload_get_file_cmd_impl(slash);
 }
-slash_command_sub(win_payload, get_file, win_payload_get_file_cmd, "<remote_name_or_full_path> [local_path]", "Download a file from Windows with resume");
+slash_command_sub(win_payload, get_file, win_payload_get_file_cmd, "<remote_name_or_full_path> [local_path] [size] [offset]", "Download a file from Windows with resume");
 
 static int win_payload_delete_file_cmd(struct slash *slash) {
     return win_payload_delete_file_cmd_impl(slash);
